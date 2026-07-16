@@ -116,7 +116,7 @@ public class ValidadorService {
             boolean aprovado = true;
             String mensagem;
 
-            double limiteNitidez = 100.0; 
+            double limiteNitidez = 40.0; 
 
             if (!brilhoBom) {
                 aprovado = false;
