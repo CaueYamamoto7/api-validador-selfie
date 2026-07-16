@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Validador de Selfie - Triagem de Qualidade</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen flex items-center justify-center p-6">
+
+    <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl max-w-md w-full border border-gray-700">
+        <h1 class="text-2xl font-bold text-center mb-2 text-indigo-400">Validador de Selfie</h1>
+        <p class="text-sm text-gray-400 text-center mb-6">Envie sua foto para triagem e análise de iluminação.</p>
+
+        <div id="dropzone" class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center cursor-pointer hover:border-indigo-500 transition duration-300 mb-6 bg-gray-800/50">
+            <input type="file" id="fileInput" accept="image/*" class="hidden">
+            
+            <div id="uploadPrompt">
+                <svg class="mx-auto h-12 w-12 text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <p class="text-sm font-semibold">Arraste sua selfie aqui</p>
+                <p class="text-xs text-gray-500 mt-1">ou clique para escolher do computador</p>
+            </div>
+
+            <img id="previewImage" class="hidden max-h-48 mx-auto rounded-lg shadow-md" src="" alt="Sua selfie">
+        </div>
+
+        <button id="btnValidar" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-xl transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+            Analisar Qualidade 🚀
+        </button>
+
+        <div id="resultCard" class="hidden mt-6 p-5 rounded-xl border">
+            <h3 id="resultTitle" class="font-bold text-lg mb-2"></h3>
+            <p id="resultMessage" class="text-sm text-gray-300 mb-4"></p>
+            
+            <div class="grid grid-cols-2 gap-3 text-xs border-t border-gray-700 pt-3">
+                <div>
+                    <span class="text-gray-500">Resolução:</span>
+                    <p id="infoResolucao" class="font-semibold text-gray-300">-</p>
+                </div>
+                <div>
+                    <span class="text-gray-500">Brilho Médio:</span>
+                    <p id="infoBrilho" class="font-semibold text-gray-300">-</p>
+                </div>
+                <div>
+                    <span class="text-gray-500">Rostos Detectados:</span>
+                    <p id="infoRostos" class="font-semibold text-gray-300">-</p>
+                </div>
+                <div>
+                    <span class="text-gray-500">Score de Nitidez:</span>
+                    <p id="infoNitidez" class="font-semibold text-gray-300">-</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        const uploadPrompt = document.getElementById('uploadPrompt');
+        const previewImage = document.getElementById('previewImage');
+        const btnValidar = document.getElementById('btnValidar');
+        const resultCard = document.getElementById('resultCard');
+        const resultTitle = document.getElementById('resultTitle');
+        const resultMessage = document.getElementById('resultMessage');
+        const infoResolucao = document.getElementById('infoResolucao');
+        const infoBrilho = document.getElementById('infoBrilho');
+        const infoRostos = document.getElementById('infoRostos');
+        const infoNitidez = document.getElementById('infoNitidez');
+
+        let selectedFile = null;
+
+        dropzone.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) carregarPreview(file);
+        });
+
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('border-indigo-500', 'bg-indigo-950/10');
+        });
+
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.classList.remove('border-indigo-500', 'bg-indigo-950/10');
+        });
+
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('border-indigo-500', 'bg-indigo-950/10');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith('image/')) {
+                carregarPreview(file);
+            }
+        });
+
+        function carregarPreview(file) {
+            selectedFile = file;
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                previewImage.src = e.target.result;
+                previewImage.classList.remove('hidden');
+                uploadPrompt.classList.add('hidden');
+            };
+            reader.readAsDataURL(file);
+
+            btnValidar.disabled = false;
+            resultCard.classList.add('hidden');
+        }
+
+        btnValidar.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            btnValidar.disabled = true;
+            btnValidar.innerText = "Analisando pixels... ⏳";
+
+            const formData = new FormData();
+            formData.append('foto', selectedFile);
+
+            try {
+                const response = await fetch('/api/selfies/validar', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('O servidor respondeu com erro.');
+                }
+
+                const dados = await response.json();
+                exibirResultado(dados);
+
+            } catch (error) {
+                exibirErro("Não foi possível conectar com o servidor Java. Verifique se o backend está rodando!");
+            } finally {
+                btnValidar.disabled = false;
+                btnValidar.innerText = "Analisar Qualidade 🚀";
+            }
+        });
+
+        function exibirResultado(dados) {
+            resultCard.classList.remove('hidden', 'bg-green-950/20', 'border-green-800', 'bg-red-950/20', 'border-red-800');
+            
+            if (dados.aprovado) {
+                resultCard.classList.add('bg-green-950/20', 'border-green-800');
+                resultTitle.innerText = "Aprovada! ✅";
+                resultTitle.className = "font-bold text-lg mb-1 text-green-400";
+            } else {
+                resultCard.classList.add('bg-red-950/20', 'border-red-800');
+                resultTitle.innerText = "Reprovada! ❌";
+                resultTitle.className = "font-bold text-lg mb-1 text-red-400";
+            }
+
+            resultMessage.innerText = dados.mensagem;
+            infoResolucao.innerText = `${dados.largura} x ${dados.altura} px`;
+            infoBrilho.innerText = `${dados.brilhoMedio} (${dados.statusBrilho})`;
+            infoRostos.innerText = dados.rostosDetectados;
+            infoNitidez.innerText = dados.nitidez.toFixed(1);
+        }
+
+        function exibirErro(msg) {
+            resultCard.classList.remove('hidden', 'bg-green-950/20', 'border-green-800');
+            resultCard.classList.add('bg-red-950/20', 'border-red-800');
+            resultTitle.innerText = "Erro na API! ⚠️";
+            resultTitle.className = "font-bold text-lg mb-1 text-red-400";
+            resultMessage.innerText = msg;
+            infoResolucao.innerText = "-";
+            infoBrilho.innerText = "-";
+            infoRostos.innerText = "-";
+            infoNitidez.innerText = "-";
+        }
+    </script>
+</body>
+</html>

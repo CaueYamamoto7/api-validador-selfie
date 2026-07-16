@@ -1,101 +1,177 @@
-package br.com.assinapdf.api_validador.service;
+package br.com.assinapdf.api_validador.service; 
 
 import br.com.assinapdf.api_validador.dto.RespostaValidacao;
-import net.sourceforge.tess4j.Tesseract;
-import org.springframework.beans.factory.annotation.Value;
+import org.opencv.core.Core; 
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.MatOfByte;
+import org.opencv.core.MatOfDouble;
+import org.opencv.core.MatOfRect;
+import org.opencv.imgcodecs.Imgcodecs;
+import org.opencv.imgproc.Imgproc;
+import org.opencv.objdetect.CascadeClassifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.imageio.ImageIO;
-import java.awt.Graphics;
-import java.awt.image.BufferedImage;
-import java.io.InputStream;
-import java.util.regex.Pattern;
+import nu.pattern.OpenCV;
 
-@Service 
+import jakarta.annotation.PostConstruct; 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+
+@Service
 public class ValidadorService {
 
-    @Value("${tesseract.datapath:./tessdata}")
-    private String tessdataPath;
+    private CascadeClassifier detectorRosto;
 
-    public RespostaValidacao processarDocumento(MultipartFile arquivoImagem) {
+    @PostConstruct
+    public void inicializarOpenCV() {
         try {
-            InputStream is = arquivoImagem.getInputStream();
-            BufferedImage imagemOriginal = ImageIO.read(is);
+            OpenCV.loadShared();
+
+            Path arquivoTemporario = Files.createTempFile("haarcascade_frontalface", ".xml");
+        
+            String urlModelo = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml";
             
-            if (imagemOriginal == null) {
-                return new RespostaValidacao(false, "NENHUM", "O arquivo enviado não é uma imagem válida.");
+            try (InputStream in = new URL(urlModelo).openStream()) {
+                Files.copy(in, arquivoTemporario, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            // 1. TRATAMENTO DA IMAGEM: Converte para Preto e Branco (Grayscale)
-            // Isso apaga o fundo colorido de segurança dos documentos e realça as letras escuras
-            BufferedImage imagemProcessada = new BufferedImage(
-                imagemOriginal.getWidth(), 
-                imagemOriginal.getHeight(), 
-                BufferedImage.TYPE_BYTE_GRAY
-            );
+            this.detectorRosto = new CascadeClassifier(arquivoTemporario.toString());
             
-            Graphics g = imagemProcessada.getGraphics();    
-            g.drawImage(imagemOriginal, 0, 0, null);
-            g.dispose();
-
-            // 2. CONFIGURAÇÃO E EXECUÇÃO DO TESSERACT OCR
-            Tesseract tesseract = new Tesseract();
-            tesseract.setDatapath(tessdataPath);
-            tesseract.setLanguage("por");
-            
-            // Executamos o motor de leitura em cima da imagem tratada
-            String textoExtraido = tesseract.doOCR(imagemProcessada);
-
-            // 3. ANÁLISE E VALIDAÇÃO DE SEGURANÇA
-            return validarTextoDocumento(textoExtraido);
+            System.out.println("\n============================================================");
+            System.out.println("[OPENCV] - DETECTOR DE ROSTOS PRONTO E CARREGADO COM SUCESSO!");
+            System.out.println("============================================================\n");
 
         } catch (Exception e) {
-            return new RespostaValidacao(false, "ERRO_INTERNO", "Falha ao processar a imagem: " + e.getMessage());
+            System.err.println("⚠️ [ERRO OPENCV] - Falha ao carregar o OpenCV ou baixar o modelo Haar Cascade.");
+            System.err.println("Erro detalhado: " + e.getMessage());
         }
     }
 
-    private RespostaValidacao validarTextoDocumento(String texto) {
-        // Normaliza para letras minúsculas para evitar problemas de maiúsculo/minúsculo
-        String textoMinusculo = texto.toLowerCase();
+    public RespostaValidacao analisarSelfie(MultipartFile arquivo) {
+        try {
+            BufferedImage imagem = ImageIO.read(arquivo.getInputStream());
+            
+            if (imagem == null) {
+                return new RespostaValidacao(false, "O arquivo enviado não é uma imagem válida.", 0, 0, 0, "Inválido", 0, 0.0);
+            }
+            int largura = imagem.getWidth();
+            int altura = imagem.getHeight();
 
-        // Regex de busca: Procura se existe qualquer Data válida (padrão DD/MM/AAAA) no documento
-        boolean temDataValida = Pattern.compile("\\d{2}/\\d{2}/\\d{4}").matcher(textoMinusculo).find();
-        
-        // Regex de busca: Procura se existe qualquer padrão de CPF válido (ex: 000.000.000-00 ou só os números)
-        boolean temCPF = Pattern.compile("\\d{3}\\.?\\d{3}\\.?\\d{3}-?\\d{2}").matcher(textoMinusculo).find();
+            if (largura < 400 || altura < 400) {
+                return new RespostaValidacao(false, "Resolução muito baixa. Tire uma foto melhor.", largura, altura, 0, "Não analisado", 0, 0.0);
+            }
 
-        // REGRAS PARA RG:
-        // Precisa conter termos de identificação civil (e mapeamos os ruídos que o OCR gerou antes para tolerância)
-        // E também obrigatoriamente precisa encontrar pelo menos uma Data (Nascimento ou Expedição)
-        boolean temTermosRG = textoMinusculo.contains("república") 
-                           || textoMinusculo.contains("republica")
-                           || textoMinusculo.contains("registro geral")
-                           || textoMinusculo.contains("identidade")
-                           || textoMinusculo.contains("polegar")
-                           || textoMinusculo.contains("nascimento")
-                           || textoMinusculo.contains("datanascmento");
+            double somaLuminancia = 0;
+            int totalPixels = largura * altura;
 
-        boolean ehRG = temTermosRG && temDataValida;
+            for (int x = 0; x < largura; x++) {
+                for (int y = 0; y < altura; y++) {
+                    int rgb = imagem.getRGB(x, y);                          
+                    int r = (rgb >> 16) & 0xFF;
+                    int g = (rgb >> 8) & 0xFF;
+                    int b = rgb & 0xFF;
+                    
+                    double luminancia = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                    somaLuminancia += luminancia;
+                }
+            }
+            double brilhoMedio = somaLuminancia / totalPixels;
+            long brilhoMedioArredondado = Math.round(brilhoMedio);
+            boolean brilhoBom = true;
+            String statusBrilho = "Excelente";
+            if (brilhoMedio < 50) {
+                brilhoBom = false;
+                statusBrilho = "Muito escura (Evite locais sem iluminação)";
+            } else if (brilhoMedio > 160) {
+                brilhoBom = false;
+                statusBrilho = "Muito clara (Evite luz direta ou flash excessivo)";
+            }
 
-        // REGRAS PARA CNH:
-        // Precisa conter termos de trânsito 
-        // E obrigatoriamente possuir um CPF válido E uma Data válida (Nascimento ou Validade)
-        boolean temTermosCNH = textoMinusculo.contains("carteira nacional") 
-                            || textoMinusculo.contains("habilitação") 
-                            || textoMinusculo.contains("habilitacao") 
-                            || textoMinusculo.contains("detran")
-                            || textoMinusculo.contains("condutor");
+            int rostosDetectados = 0;
+            double scoreNitidez = 0.0;
+            
+            byte[] bytesDoArquivo = arquivo.getBytes();
+            Mat matImagem = Imgcodecs.imdecode(new MatOfByte(bytesDoArquivo), Imgcodecs.IMREAD_UNCHANGED);
+            
+            if (matImagem != null && !matImagem.empty()) {
+                scoreNitidez = calcularScoreNitidez(matImagem);
 
-        boolean ehCNH = temTermosCNH && temCPF && temDataValida;
+                if (detectorRosto != null && !detectorRosto.empty()) {
+                    MatOfRect facesDetectadas = new MatOfRect();
+                    detectorRosto.detectMultiScale(matImagem, facesDetectadas);
+                    rostosDetectados = facesDetectadas.toArray().length;
+                }
+                
+                matImagem.release();
+            }
 
-        // RETORNO DA VALIDAÇÃO INTELIGENTE
-        if (ehCNH) {
-            return new RespostaValidacao(true, "CNH", "CNH identificada e validada com sucesso.");
-        } else if (ehRG) {
-            return new RespostaValidacao(true, "RG", "RG identificado e validado com sucesso.");
+            boolean aprovado = true;
+            String mensagem;
+
+            double limiteNitidez = 100.0; 
+
+            if (!brilhoBom) {
+                aprovado = false;
+                mensagem = "Selfie rejeitada: O ambiente está com iluminação inadequada (" + statusBrilho + ").";
+            } else if (scoreNitidez < limiteNitidez) {
+                aprovado = false;
+                mensagem = String.format("Selfie rejeitada: A foto está tremida ou embaçada (Nitidez: %.1f). Segure o celular firme e tente novamente.", scoreNitidez);
+            } else if (rostosDetectados == 0) {
+                aprovado = false;
+                mensagem = "Selfie rejeitada: Nenhum rosto humano foi detectado. Centralize seu rosto na câmera.";
+            } else if (rostosDetectados > 1) {
+                aprovado = false;
+                mensagem = "Selfie rejeitada: Encontramos " + rostosDetectados + " rostos na imagem. Tire a foto sozinho.";
+            } else {
+                mensagem = "Selfie aprovada! Rosto detectado com ótima nitidez e iluminação.";
+            }
+
+            return new RespostaValidacao(
+                aprovado, 
+                mensagem, 
+                largura, 
+                altura, 
+                brilhoMedioArredondado, 
+                statusBrilho,
+                rostosDetectados,
+                scoreNitidez
+            );
+
+        } catch (IOException e) {
+            return new RespostaValidacao(false, "Erro ao processar imagem: " + e.getMessage(), 0, 0, 0, "Erro", 0, 0.0);
+        }
+    }
+
+    private double calcularScoreNitidez(Mat src) {
+        Mat gray = new Mat();
+        if (src.channels() > 1) {
+            Imgproc.cvtColor(src, gray, Imgproc.COLOR_BGR2GRAY);
+        } else {
+            src.copyTo(gray);
         }
 
-        return new RespostaValidacao(false, "DESCONHECIDO", "Documento recusado. Não identificamos dados estruturais de RG ou CNH legítimos.");
+        Mat laplacian = new Mat();
+        Imgproc.Laplacian(gray, laplacian, CvType.CV_64F);
+
+        MatOfDouble mean = new MatOfDouble();
+        MatOfDouble stdDev = new MatOfDouble();
+        Core.meanStdDev(laplacian, mean, stdDev);
+
+        double variancia = Math.pow(stdDev.toArray()[0], 2);
+
+        gray.release();
+        laplacian.release();
+        mean.release();
+        stdDev.release();
+
+        return variancia;
     }
 }
