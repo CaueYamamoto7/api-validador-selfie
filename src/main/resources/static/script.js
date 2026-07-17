@@ -1,187 +1,157 @@
-// =========================================================================
-// 1. MAPEAMENTO DE ELEMENTOS (Ponte entre HTML e JavaScript)
-// =========================================================================
-const videoWebcam = document.getElementById('webcam');
-const canvasFoto = document.getElementById('foto-capturada');
-const previewImagem = document.getElementById('preview-imagem');
-
-const btnIniciarCam = document.getElementById('btn-iniciar-cam');
-const btnTirarFoto = document.getElementById('btn-tirar-foto');
-const btnValidar = document.getElementById('btn-validar');
-const inputArquivo = document.getElementById('input-arquivo');
-
-// Variável global para armazenar o fluxo de transmissão da webcam ativa
-let fluxoCamera = null;
-
-// =========================================================================
-// 2. LÓGICA DA WEBCAM (Ligar, Capturar e Desligar)
-// =========================================================================
-
-/**
- * Solicita permissão ao sistema operacional e transmite a câmera ao vivo na tela
- */
-async function ligarCamera() {
-    try {
-        // Pede permissão para acessar apenas a câmera (vídeo), sem áudio
-        fluxoCamera = await navigator.mediaDevices.getUserMedia({ 
-            video: { width: 1280, height: 720 }, // Qualidade HD para melhor validação
-            audio: false 
-        });
-
-        // Conecta o fluxo recebido diretamente à nossa tag <video>
-        videoWebcam.srcObject = fluxoCamera;
-
-        // Garante que apenas o vídeo ao vivo fique visível e os outros modos ocultos
-        videoWebcam.style.display = 'block';
-        canvasFoto.style.display = 'none';
-        previewImagem.style.display = 'none';
-        
-        // Altera o estado dos botões de controle
-        btnTirarFoto.disabled = false;
-        btnIniciarCam.disabled = true; // Desativa para evitar ligar a câmera repetidamente
-        
-    } catch (erro) {
-        console.error("Erro ao tentar acessar a câmera: ", erro);
-        alert("Não foi possível acessar a câmera. Verifique se deu permissão de acesso no navegador.");
-    }
-}
-
-/**
- * "Congela" o quadro atual do vídeo e desenha na tela usando o elemento Canvas
- */
-function tirarFoto() {
-    if (!fluxoCamera) return;
-
-    // Define o tamanho real da captura igual ao tamanho que a câmera está transmitindo
-    canvasFoto.width = videoWebcam.videoWidth;
-    canvasFoto.height = videoWebcam.videoHeight;
-
-    // Pega o "pincel" de desenho 2D do Canvas e desenha o frame atual do vídeo
-    const contexto = canvasFoto.getContext('2d');
-    contexto.drawImage(videoWebcam, 0, 0, canvasFoto.width, canvasFoto.height);
-
-    // Oculta a transmissão de vídeo e exibe a imagem "congelada" do Canvas
-    videoWebcam.style.display = 'none';
-    previewImagem.style.display = 'none';
-    canvasFoto.style.display = 'block';
-
-    // Desliga a luz da webcam para economizar recursos e dar privacidade ao usuário
-    desligarCamera();
-
-    // Ativa o botão de "Validar foto" para prosseguir no fluxo
-    btnValidar.disabled = false;
-    
-    // Libera novamente o botão de iniciar a câmera caso o operador queira refazer a foto
-    btnIniciarCam.disabled = false;
-}
-
-/**
- * Para todos os feixes de transmissão da câmera de forma limpa
- */
-function desligarCamera() {
-    if (fluxoCamera) {
-        fluxoCamera.getTracks().forEach(track => track.stop());
-        fluxoCamera = null;
-        videoWebcam.srcObject = null;
-    }
-}
-
-// =========================================================================
-// 3. LÓGICA DE ARQUIVOS (Upload local e Preview)
-// =========================================================================
-
-/**
- * Lê o arquivo de imagem do computador e exibe como preview na tela
- */
-inputArquivo.addEventListener('change', function(evento) {
-    const arquivo = evento.target.files[0]; // Captura o arquivo selecionado
-
-    if (arquivo) {
-        // Se a webcam estiver ativa ao fazer o upload, nós a desligamos
-        desligarCamera();
-
-        // Cria uma URL temporária e segura local para o arquivo de imagem
-        const urlImagem = URL.createObjectURL(arquivo);
-
-        // Define a URL como fonte da tag <img>
-        previewImagem.src = urlImagem;
-
-        // Oculta a câmera e o canvas, exibindo apenas a imagem carregada
-        videoWebcam.style.display = 'none';
-        canvasFoto.style.display = 'none';
-        previewImagem.style.display = 'block';
-
-        // Ativa o botão de validação e libera o botão de iniciar câmera caso queira voltar atrás
-        btnValidar.disabled = false;
-        btnIniciarCam.disabled = false;
-    }
+const DOM = Object.freeze({
+    video: document.getElementById('webcam'),
+    canvas:document.getElementById('foto-capturada'),
+    preview:document.getElementById('preview-imagem'),
+    btnIniciar: document.getElementById('btn-iniciar-cam'),
+    btnTirar: document.getElementById('btn-tirar-foto'),
+    btnValidar: document.getElementById('btn-validar'),
+    inputArquivo: document.getElementById('input-arquivo')
 });
-
-// =========================================================================
-// 4. INTEGRAÇÃO REAL COM A SUA API JAVA
-// =========================================================================
-
-/**
- * Envia os dados encapsulados em FormData via requisição POST (fetch)
- */
-async function enviarParaBackend(formData) {
-    // Muda visualmente o botão para mostrar que está processando
-    btnValidar.disabled = true;
-    btnValidar.innerText = "Enviando...";
-
-    try {
-        // ROTA EXATA: Mapeada no seu controller Java (@RequestMapping("/api/selfies") + @PostMapping("/validar"))
-        const urlAPI = 'http://localhost:8080/api/selfies/validar'; 
-
-        const resposta = await fetch(urlAPI, {
-            method: 'POST',
-            body: formData
-        });
-
-        if (resposta.ok) {
-            const resultado = await resposta.json();
-            alert("Sucesso! Resposta do servidor: " + JSON.stringify(resultado));
-        } else {
-            alert("Erro no servidor: " + resposta.status);
+const AppState = {
+    cameraStream: null,
+    status: 'IDLE',
+    transitionTo(novoEstado){
+        this.status=novoEstado;
+        this.aplicarRegrasDoEstado();
+    },
+    aplicarRegrasDoEstado(){
+        switch(this.status){
+            case 'IDLE':
+                DOM.btnIniciar.disabled = false;
+                DOM.btnTirar.disabled = true;
+                DOM.btnValidar.disabled = true
+                break;
+            case 'STREAMING':
+                DOM.btnIniciar.disabled =true;
+                DOM.btnTirar.disabled = false;
+                DOM.btnValidar.disabled = true;
+                break;
+            case 'CAPTURED':
+                DOM.btnIniciar.disabled =false;
+                DOM.btnTirar.disabled = true;
+                DOM.btnValidar.disabled = false;
+                break;
+            case 'UPLOADING':
+                DOM.btnIniciar.disabled =true;
+                DOM.btnTirar.disabled =true ;
+                DOM.btnValidar.disabled = true;
+                break;
+            
         }
-
-    } catch (erro) {
-        console.error("Erro ao enviar foto:", erro);
-        alert("Erro de conexão. Certifique-se de que a sua API Java está rodando!");
-    } finally {
-        // Devolve o botão ao estado normal após terminar
-        btnValidar.disabled = false;
-        btnValidar.innerText = "Validar foto";
     }
-}
-
-// Ouvinte de clique no botão de validar
-btnValidar.addEventListener('click', async () => {
-    // Cria um formulário virtual (chave-valor) para empacotar a imagem
-    const dadosFormulario = new FormData();
-
-    if (previewImagem.style.display === 'block') {
-        // Caso 1: A imagem veio do UPLOAD de arquivo
-        const arquivo = inputArquivo.files[0];
-        
-        // O nome 'foto' bate exatamente com o @RequestParam("foto") no seu Java Controller
-        dadosFormulario.append('foto', arquivo); 
-        enviarParaBackend(dadosFormulario);
-
-    } else if (canvasFoto.style.display === 'block') {
-        // Caso 2: A imagem foi tirada na WEBCAM (convertemos o canvas para arquivo binário Blob)
-        canvasFoto.toBlob(async (blob) => {
-            if (blob) {
-                // O nome 'foto' bate exatamente com o @RequestParam("foto") no seu Java Controller
-                dadosFormulario.append('foto', blob, 'selfie.png');
-                enviarParaBackend(dadosFormulario);
+};
+function verificarIntegridadeDOM(){
+    const elementosFaltando = Object.entries(DOM)
+    .filter(([chave, valor]) =>!valor)
+    .map(([chave])=>chave);
+            if(elementosFaltando.length > 0){
+                console.error(`Erro de inicialização: IDs não encontrados:${elementosFaltando.join(`, `)}`)
+            }else{
+                AppState.transitionTo('IDLE');
+                console.log("DOM mapeado e AppState iniciado com sucesso.")
             }
-        }, 'image/png');
-    }
-});
+        }
+verificarIntegridadeDOM();
+        async function ligarCam(){
+            try{
+                const stream =await navigator.mediaDevices.getUserMedia({
+                    video:{ width: 1280, height: 720},
+                    audio: false
+                });
+                AppState.cameraStream = stream;
+                DOM.video.srcObject = stream;
+                DOM.video.style.display='block';
+                    if(DOM.preview)DOM.preview.style.display = 'none';
+                AppState.transitionTo('STREAMING');
+            console.log("Câmera inciada.");
+            }catch(erro){
+            console.error("Erro ao acessar câmera", erro);
+                alert("Não foi possivel acessar a câmera. Verifique as permissões do seu navegador e seu dispositivo");
+            }
+        }
+DOM.btnIniciar.addEventListener('click', ligarCam);
+        function tirarFoto(){
+            DOM.canvas.width = DOM.video.videoWidth;
+            DOM.canvas.height = DOM.video.videoHeight;
+                const contexto = DOM.canvas.getContext('2d');
+                    contexto.drawImage(DOM.video, 0, 0, DOM.canvas.width, DOM.canvas.height);
+                    const fotoBase64 = DOM.canvas.toDataURL('image/jpeg');
+                        if(DOM.preview){
+                            DOM.preview.src = fotoBase64;
+                            DOM.preview.style.display = 'block'
+                        }
+                DOM.video.style.display = 'none';
+                        if(AppState.cameraStream){
+                            AppState.cameraStream.getTracks().forEach(track=>track.stop());
+                            AppState.transitionTo('CAPTURED');
+            console.log("Foto capturada com sucesso")
+                        }
+        }
+DOM.btnTirar.addEventListener('click', tirarFoto)
+        function manipularUploadArquivo(evento){
+            const arquivo = evento.target.files[0];
+                if(!arquivo) 
+                    return;
+                if(!arquivo.type.startsWith('image/')){
+                    alert("Por favor, selecione apenas arquivos de imagem.");
+                    DOM.inputArquivo.value='';
+                    return; } 
+                const leitor = new FileReader();
+                leitor.onload = function(e){
+                    const fotoBase64 = e.target.result;
+                        if(DOM.preview){
+                            DOM.preview.src = fotoBase64;
+                            DOM.preview.style.display = 'block';
+                        }
+                DOM.video.style.display = 'none';
+        if(AppState.cameraStream){
+            AppState.cameraStream.getTracks().forEach(track=> track.stop());
+        }
+        AppState.transitionTo('CAPTURED');
+                console.log("Arquivo local carregado com sucesso");
+                };
+            leitor.readAsDataURL(arquivo);
+        }
+DOM.inputArquivo.addEventListener('change', manipularUploadArquivo);
+        async function enviarFoto(){
+            const imagemBase64 = DOM.preview ? DOM.preview.src : null;
+                if(!imagemBase64 || imagemBase64.startsWith('http://') || imagemBase64.startsWith('https://')){
+                    alert("Por favor, tire uma foto ou selecione um arquivo válido");
+                    return;
+                }
+        AppState.transitionTo('UPLOADING');
+                console.log("Imagem sendo enviada para análise");
+                    try{
+                        const respostaPrevia = await fetch(imagemBase64);
+                        const blobImagem = await respostaPrevia.blob();
+                        const formData = new FormData();
+                            formData.append('foto', blobImagem, 'selfie.jpg');
+                        const resposta = await fetch('http://localhost:8080/api/validar',{
+                            method:'POST',
+                            body: formData
+                        });
+                        if(!resposta.ok){
+                            throw new Error(`Erro no servidor: ${resposta.status}`);
+                        }
+                        const resultado=await resposta.json();
+                        console.log("Resposta", resultado);
+                        alert(`Resultado: ${resultado.mensagem}`);
 
-// =========================================================================
-// 5. ATIVAÇÃO DOS BOTÕES
-// =========================================================================
-btnIniciarCam.addEventListener('click', ligarCamera);
-btnTirarFoto.addEventListener('click', tirarFoto);
+                        restaurarEstadoInicial();
+                    }catch(erro){
+                        console.error("Falha ao enviar requisição.");
+                        alert(`Não foi possível realizar a validção: ${erro.message}`)
+                AppState.transitionTo('CAPTURED');
+             }
+
+        }
+        function restaurarEstadoInicial(){
+            if(DOM.preview){
+                DOM.preview.src = '';
+                DOM.preview.style.display='none';
+            }
+            DOM.video.style.display='none';
+            DOM.inputArquivo.value='';
+            AppState.transitionTo('IDLE');
+        }
+DOM.btnValidar.addEventListener('click', enviarFoto);
